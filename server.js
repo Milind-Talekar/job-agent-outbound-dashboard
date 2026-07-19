@@ -5,6 +5,7 @@ import fs from 'fs';
 import { google } from 'googleapis';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { GoogleGenAI } from '@google/genai'; // Added Google Gemini AI SDK
 
 // Fix __dirname for ES Modules configuration environment
 const __filename = fileURLToPath(import.meta.url);
@@ -13,6 +14,9 @@ const __dirname = path.dirname(__filename);
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+// Initialize the Gemini client using the environment variable
+const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
 const RESUME_TEXT_PATH = '/Users/milindtalekar/Downloads/Job_Dashboard_using_Gemini/resume_keywords.txt'; 
 const RESUME_PDF_PATH = '/Users/milindtalekar/Documents/MOOLYA/Milind_Talekar_QA_PhonePe_2026.pdf'; 
@@ -32,14 +36,14 @@ function logApplicationData(entry) {
   fs.writeFileSync(TRACKER_DB_PATH, JSON.stringify(logs, null, 2), 'utf-8');
 }
 
-// 1. DYNAMIC ATS SCORE COMPUTATION
-app.post('/api/ats-check', (req, res) => {
+// 1. DYNAMIC AI-DRIVEN ATS SCORE COMPUTATION
+app.post('/api/ats-check', async (req, res) => {
   const { jdText } = req.body;
   if (!jdText) {
     return res.json({ score: 0, matchedKeywords: [], missingKeywords: [] });
   }
 
-  // Read your local resume keywords file
+  // Read local resume keywords file
   let resumeText = "";
   try {
     if (fs.existsSync(RESUME_TEXT_PATH)) {
@@ -49,57 +53,97 @@ app.post('/api/ats-check', (req, res) => {
     console.error("Could not load local resume file metrics:", err);
   }
 
-  // Definitive dictionary of QA skills to look for inside the Job Description
-  const QA_SKILL_DICTIONARY = [
-      // --- Testing Skills ---
-      "manual testing", "automated testing", "functional testing", "integration testing", 
-      "smoke testing", "sanity testing", "regression testing", "test case design", 
-      "test case execution", "api testing", "database testing", "mobile app testing", 
-      "android testing", "ios testing", "bdd", "cucumber", "gherkin", "selenium", 
-      "webdriver", "selenium webdriver", "playwright", "appium", "rest-assured", 
-      "rest assured", "agile", "scrum", "visual ai testing", "security testing", 
-      "security testing fundamentals", "end to end testing",
+  // Declare variable outside the try block to fix the ReferenceError scope bug
+  let aiResponse;
 
-      // --- Programming Languages & Tools ---
-      "java", "typescript", "sql server", "mysql", "mongodb", "postman", "soap ui", 
-      "apache jmeter", "jmeter", "jenkins", "git", "github", "bitbucket", "gitlab", "ci/cd",
-      "browserstack", "headspin", "ide", "android studio", "visual studio code", "vs code", 
-      "eclipse", "intellij", "pycharm", "mantis", "jira", "confluence", "testrail", "zephyr",
+  try {
+    // Structural engineer prompt forcing clean JSON extraction
+    const systemPrompt = `
+      You are an expert ATS (Applicant Tracking System) parser specialized in software engineering and QA Automation.
+      Analyze the following Job Description and extract a list of core technical skills, frameworks, testing concepts, and tools required for the job.
+      
+      CRITICAL INSTRUCTIONS:
+      - Clean the output and only extract high-value professional keywords (e.g., "Playwright", "API Testing", "SDLC", "Postman", "CI/CD").
+      - Return the result ONLY as a valid, raw JSON array of strings. Do not include markdown blocks, text wrappers, formatting, or extra dialogue.
+      
+      Example expected output structure:
+      ["PLAYWRIGHT", "TEST AUTOMATION", "API TESTING", "POSTMAN", "SDLC", "JIRA"]
+      
+      Job Description:
+      ${jdText}
+    `;
 
-      // --- Log Analysis ---
-      "log analysis", "droove logs", "elastic search", "echo", "redux", "chucker logs",
+    console.log("🤖 Sending request to Gemini...");
 
-      // --- AI Tools ---
-      "ai tools", "phonepe agenthub", "agenthub", "wingman ai", "testim.io", "opencode ai", 
-      "chatgpt", "google gemini", "gemini", "copilot ai", "prompt engineering",
+    // Send context query payload directly to Gemini
+    aiResponse = await ai.models.generateContent({
+      model: 'gemini-3.5-flash', 
+      contents: systemPrompt,
+      config: {
+        responseMimeType: "application/json"
+      }
+    });
 
-      // --- Soft Skills ---
-      "critical thinking", "ai validation", "complex problem solving", 
-      "stakeholder management", "data-driven analysis", "explaining risk"
-    ];
+  } catch (error) {
+    console.error("❌ Gemini API Error Handled:", error.message);
+    
+    // Explicitly handle free tier quota restrictions safely
+    if (error.status === 429) {
+      return res.status(429).json({ 
+        score: 0, 
+        matchedKeywords: [], 
+        missingKeywords: [], 
+        error: "You've exceeded the free request limits. Please wait a minute and try again." 
+      });
+    }
+    
+    return res.status(500).json({ 
+      score: 0, 
+      matchedKeywords: [], 
+      missingKeywords: [], 
+      error: error.message 
+    });
+  }
 
+  // Processing steps continue safely outside the API fetch block
+  const rawText = aiResponse.text.trim();
+  console.log("📥 Raw response from Gemini:", rawText);
+
+  // Parse AI-generated keyword array
+  let extractedKeywords = [];
+  try {
+    extractedKeywords = JSON.parse(rawText);
+    if (!Array.isArray(extractedKeywords) && extractedKeywords.keywords) {
+      extractedKeywords = extractedKeywords.keywords;
+    }
+  } catch (parseError) {
+    console.log("⚠️ Fallback cleaning markdown blocks for parser...");
+    const cleanJsonString = rawText.replace(/```json|```/g, "").trim();
+    extractedKeywords = JSON.parse(cleanJsonString);
+  }
+  
   const matchedKeywords = [];
   const missingKeywords = [];
 
-  // Clean the job description text for safe, case-insensitive keyword checking
-  const cleanJdText = jdText.toLowerCase().replace(/[#\/]/g, ' ');
+  // Map extracted elements over local text logs
+  if (Array.isArray(extractedKeywords)) {
+    extractedKeywords.forEach(keyword => {
+      const cleanKeyword = keyword.trim().toLowerCase();
+      if (!cleanKeyword) return;
 
-  // Find which dictionary skills exist in the JD, then check your resume
-  QA_SKILL_DICTIONARY.forEach(skill => {
-    const jdRegex = new RegExp(`\\b${skill}\\b`, 'i');
-    
-    if (cleanJdText.match(jdRegex)) {
-      const resumeRegex = new RegExp(`\\b${skill}\\b`, 'i');
-      
+      // Escape dynamic string values to prevent regex pattern breaks
+      const escapedKeyword = cleanKeyword.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+      const resumeRegex = new RegExp(`\\b${escapedKeyword}\\b|${escapedKeyword}`, 'i');
+
       if (resumeText.match(resumeRegex)) {
-        matchedKeywords.push(skill.toUpperCase());
+        matchedKeywords.push(keyword.toUpperCase());
       } else {
-        missingKeywords.push(skill.toUpperCase());
+        missingKeywords.push(keyword.toUpperCase());
       }
-    }
-  });
+    });
+  }
 
-  // Calculate accurate percentage base score
+  // Calculate dynamic percentage metric bases
   let score = 0;
   const totalKeywords = matchedKeywords.length + missingKeywords.length;
 
@@ -116,7 +160,6 @@ app.post('/api/ats-check', (req, res) => {
 
 // 2. LIVE ROUTING ENVIRONMENT WITH DYNAMIC CAPTURE 
 app.post('/api/send-email', async (appReq, appRes) => {
-  // Guard validation bracket preventing runtime destructuring crashes if req.body parsing drops
   if (!appReq.body || Object.keys(appReq.body).length === 0) {
     return appRes.status(400).json({ 
       success: false, 
@@ -126,12 +169,10 @@ app.post('/api/send-email', async (appReq, appRes) => {
 
   const { toEmail, subject, body, companyName, jobTitle, atsScore } = appReq.body;
   
-  // Safely extract environment keys
   const clientId = process.env.GOOGLE_CLIENT_ID;
   const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
   const refreshToken = process.env.GOOGLE_REFRESH_TOKEN;
 
-  // Dynamically initialize the OAuth2 client using credentials from .env
   const oauth2Client = new google.auth.OAuth2(
     clientId,
     clientSecret,
