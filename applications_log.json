@@ -1,0 +1,49 @@
+[
+  {
+    "timestamp": "2026-07-18T12:02:24.072Z",
+    "company": "Unknown Company",
+    "role": "QA Engineer",
+    "recipientEmail": "milindstalekar1221@gmail.com",
+    "subjectLine": "Application for qa - Milind Talekar",
+    "googleMessageId": "19f751b2e851b250",
+    "googleThreadId": "19f751b2e851b250",
+    "status": "Dispatched"
+  },
+  {
+    "timestamp": "2026-07-18T13:18:28.227Z",
+    "role": "QA engineer",
+    "company": "paytm",
+    "recipientEmail": "milind@mailinator.com",
+    "atsScore": 0,
+    "status": "Applied (emailed) - manual send",
+    "appliedDate": "2026-07-18T13:18:28.227Z",
+    "followUpCount": "0 / 5",
+    "googleThreadId": "19f7560d5f3ec95c"
+  },
+  {
+    "timestamp": "2026-07-18T17:30:30.085Z",
+    "role": "QA Engineer",
+    "company": "EY",
+    "recipientEmail": "milind@mailinator.com",
+    "atsScore": 92,
+    "status": "Applied (emailed) - manual send",
+    "appliedDate": "2026-07-18T17:30:30.085Z",
+    "followUpCount": "0 / 5",
+    "interviewDone": false,
+    "googleThreadId": "19f764791886f8ab",
+    "interviewRound": 0
+  },
+  {
+    "timestamp": "2026-07-18T18:05:01.514Z",
+    "role": "QA Engineer",
+    "company": "EY",
+    "recipientEmail": "milind@mailinator.com",
+    "atsScore": 92,
+    "status": "Applied (emailed) - manual send",
+    "appliedDate": "2026-07-18T18:05:01.514Z",
+    "followUpCount": "0 / 5",
+    "interviewDone": false,
+    "interviewRound": 1,
+    "googleThreadId": "19f76672c8b72ab5"
+  }
+]
