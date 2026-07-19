@@ -21,19 +21,6 @@
     "googleThreadId": "19f7560d5f3ec95c"
   },
   {
-    "timestamp": "2026-07-18T17:30:30.085Z",
-    "role": "QA Engineer",
-    "company": "EY",
-    "recipientEmail": "milind@mailinator.com",
-    "atsScore": 92,
-    "status": "Applied (emailed) - manual send",
-    "appliedDate": "2026-07-18T17:30:30.085Z",
-    "followUpCount": "0 / 5",
-    "interviewDone": false,
-    "googleThreadId": "19f764791886f8ab",
-    "interviewRound": 0
-  },
-  {
     "timestamp": "2026-07-18T18:05:01.514Z",
     "role": "QA Engineer",
     "company": "EY",
@@ -45,5 +32,18 @@
     "interviewDone": false,
     "interviewRound": 1,
     "googleThreadId": "19f76672c8b72ab5"
+  },
+  {
+    "timestamp": "2026-07-19T09:12:42.894Z",
+    "role": "wefasdfg",
+    "company": "milin",
+    "recipientEmail": "milind@mailinator.com",
+    "atsScore": 0,
+    "status": "Applied (emailed) - manual send",
+    "appliedDate": "2026-07-19T09:12:42.894Z",
+    "followUpCount": "0 / 5",
+    "interviewDone": false,
+    "interviewRound": 0,
+    "googleThreadId": "19f79a630f9476af"
   }
 ]

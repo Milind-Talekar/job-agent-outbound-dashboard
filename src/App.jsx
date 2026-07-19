@@ -73,32 +73,30 @@ export default function App() {
     setIsCheckingAts(false);
   };
 
+  // FIXED: Converted from multi-part FormData payload to structured application/json payload
   const executeRealSend = async (e) => {
     e.preventDefault();
     if (isDeliveringPackage) return; 
-    if (resumeType === 'manual' && !customResumeFile) {
-      return alert("Please select/upload a custom resume PDF first.");
+    
+    if (resumeType === 'manual') {
+      alert("Manual custom upload asset injection is bypassed to match the system JSON backend structure. Your system profile file path configured in server.js will be transmitted automatically.");
     }
     
     setIsDeliveringPackage(true); 
     try {
-      const formData = new FormData();
-      formData.append('fromAccount', fromAccount);
-      formData.append('toEmail', recruiterEmail);
-      formData.append('subject', subjectLine);
-      formData.append('body', emailBody);
-      formData.append('companyName', companyName);
-      formData.append('jobTitle', jobTitle);
-      formData.append('atsScore', atsScore || 0);
-      formData.append('resumeType', resumeType);
-
-      if (resumeType === 'manual' && customResumeFile) {
-        formData.append('resumeFile', customResumeFile);
-      }
-
       const res = await fetch('http://localhost:3001/api/send-email', {
         method: 'POST',
-        body: formData 
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          toEmail: recruiterEmail,
+          subject: subjectLine,
+          body: emailBody,
+          companyName: companyName,
+          jobTitle: jobTitle,
+          atsScore: atsScore || 0
+        })
       });
       
       const data = await res.json();
@@ -272,7 +270,6 @@ export default function App() {
           </div>
           
           <div className="flex items-center gap-3">
-            {/* THEME TOGGLE BUTTON */}
             <button 
               onClick={() => setTheme(isDark ? 'light' : 'dark')}
               className={`p-2 rounded-xl border ${isDark ? 'bg-slate-900 border-slate-800 text-amber-400 hover:bg-slate-800' : 'bg-white border-slate-200 text-indigo-600 hover:bg-slate-50'} transition shadow-sm flex items-center gap-1.5 text-xs font-semibold`}
@@ -520,16 +517,16 @@ export default function App() {
                       <td className="py-3.5 px-4">
                         <div className="flex items-center gap-2">
                           <div className={`flex p-0.5 rounded-lg border text-[10px] font-bold ${isDark ? 'bg-slate-950 border-slate-800' : 'bg-slate-100 border-slate-200'}`}>
-                            <button onClick={() => handleToggleInterview(app.timestamp, app.interviewDone)} className={`px-2 py-0.5 rounded-md transition-all ${app.interviewDone ? 'bg-emerald-500 text-white font-bold' : 'text-slate-400'}`}>Yes</button>
-                            <button onClick={() => handleToggleInterview(app.timestamp, app.interviewDone)} className={`px-2 py-0.5 rounded-md transition-all ${!app.interviewDone ? (isDark ? 'bg-slate-800 text-slate-400' : 'bg-white text-slate-700 shadow-sm') : 'text-slate-400'}`}>No</button>
+                            <button type="button" onClick={() => handleToggleInterview(app.timestamp, app.interviewDone)} className={`px-2 py-0.5 rounded-md transition-all ${app.interviewDone ? 'bg-emerald-500 text-white font-bold' : 'text-slate-400'}`}>Yes</button>
+                            <button type="button" onClick={() => handleToggleInterview(app.timestamp, app.interviewDone)} className={`px-2 py-0.5 rounded-md transition-all ${!app.interviewDone ? (isDark ? 'bg-slate-800 text-slate-400' : 'bg-white text-slate-700 shadow-sm') : 'text-slate-400'}`}>No</button>
                           </div>
 
                           {app.interviewDone && (
                             <div className={`flex items-center px-1.5 py-0.5 rounded-lg border text-[10px] ${isDark ? 'bg-slate-950 border-slate-800' : 'bg-white border-slate-200 shadow-sm'}`}>
                               <span className="text-slate-400 mr-1.5 font-bold uppercase text-[9px]">Round</span>
-                              <button onClick={() => handleUpdateRound(app.timestamp, 'decrement')} className={`w-4 h-4 flex items-center justify-center rounded font-bold ${isDark ? 'bg-slate-800 text-slate-300' : 'bg-slate-100 text-slate-600'}`}>-</button>
+                              <button type="button" onClick={() => handleUpdateRound(app.timestamp, 'decrement')} className={`w-4 h-4 flex items-center justify-center rounded font-bold ${isDark ? 'bg-slate-800 text-slate-300' : 'bg-slate-100 text-slate-600'}`}></button>
                               <span className="font-mono font-bold text-blue-500 px-1.5 min-w-[14px] text-center">{app.interviewRound || 0}</span>
-                              <button onClick={() => handleUpdateRound(app.timestamp, 'increment')} className={`w-4 h-4 flex items-center justify-center rounded font-bold ${isDark ? 'bg-slate-800 text-slate-300' : 'bg-slate-100 text-slate-600'}`}>+</button>
+                              <button type="button" onClick={() => handleUpdateRound(app.timestamp, 'increment')} className={`w-4 h-4 flex items-center justify-center rounded font-bold ${isDark ? 'bg-slate-800 text-slate-300' : 'bg-slate-100 text-slate-600'}`}>+</button>
                             </div>
                           )}
                         </div>
@@ -540,8 +537,8 @@ export default function App() {
                       
                       <td className="py-3.5 px-4 text-center">
                         <div className="flex items-center justify-center gap-2">
-                          <button onClick={() => handleFollowUp(app)} disabled={loadingFollowUpTimestamp === app.timestamp} className="bg-blue-600 hover:bg-blue-500 disabled:bg-slate-300 text-white font-bold text-[10px] uppercase tracking-wider px-2.5 py-1 rounded-lg transition">{loadingFollowUpTimestamp === app.timestamp ? "Sending..." : "Follow-up"}</button>
-                          <button onClick={() => deleteApplication(app.timestamp)} className="text-slate-400 hover:text-rose-500 p-1.5 rounded-lg hover:bg-rose-500/10 transition-colors"><Trash2 className="w-3.5 h-3.5" /></button>
+                          <button type="button" onClick={() => handleFollowUp(app)} disabled={loadingFollowUpTimestamp === app.timestamp} className="bg-blue-600 hover:bg-blue-500 disabled:bg-slate-300 text-white font-bold text-[10px] uppercase tracking-wider px-2.5 py-1 rounded-lg transition">{loadingFollowUpTimestamp === app.timestamp ? "Sending..." : "Follow-up"}</button>
+                          <button type="button" onClick={() => deleteApplication(app.timestamp)} className="text-slate-400 hover:text-rose-500 p-1.5 rounded-lg hover:bg-rose-500/10 transition-colors"><Trash2 className="w-3.5 h-3.5" /></button>
                         </div>
                       </td>
                     </tr>

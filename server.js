@@ -116,6 +116,14 @@ app.post('/api/ats-check', (req, res) => {
 
 // 2. LIVE ROUTING ENVIRONMENT WITH DYNAMIC CAPTURE 
 app.post('/api/send-email', async (appReq, appRes) => {
+  // Guard validation bracket preventing runtime destructuring crashes if req.body parsing drops
+  if (!appReq.body || Object.keys(appReq.body).length === 0) {
+    return appRes.status(400).json({ 
+      success: false, 
+      error: "Transmission payload undefined. Verify frontend application JSON configuration headers." 
+    });
+  }
+
   const { toEmail, subject, body, companyName, jobTitle, atsScore } = appReq.body;
   
   // Safely extract environment keys
