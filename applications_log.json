@@ -2,48 +2,41 @@
   {
     "timestamp": "2026-07-18T12:02:24.072Z",
     "company": "Unknown Company",
-    "role": "QA Engineer",
+    "role": "QA engineer",
     "recipientEmail": "milindstalekar1221@gmail.com",
     "subjectLine": "Application for qa - Milind Talekar",
     "googleMessageId": "19f751b2e851b250",
     "googleThreadId": "19f751b2e851b250",
-    "status": "Dispatched"
+    "status": "Dispatched",
+    "interviewDone": false,
+    "atsScore": 65,
+    "applicationSource": "email"
   },
   {
-    "timestamp": "2026-07-18T13:18:28.227Z",
+    "timestamp": "2026-07-20T06:29:29.437Z",
     "role": "QA engineer",
-    "company": "paytm",
-    "recipientEmail": "milind@mailinator.com",
-    "atsScore": 0,
-    "status": "Applied (emailed) - manual send",
-    "appliedDate": "2026-07-18T13:18:28.227Z",
-    "followUpCount": "0 / 5",
-    "googleThreadId": "19f7560d5f3ec95c"
-  },
-  {
-    "timestamp": "2026-07-18T18:05:01.514Z",
-    "role": "QA Engineer",
-    "company": "EY",
-    "recipientEmail": "milind@mailinator.com",
-    "atsScore": 92,
-    "status": "Applied (emailed) - manual send",
-    "appliedDate": "2026-07-18T18:05:01.514Z",
+    "company": "Corpuse data engineer",
+    "recipientEmail": "milind | 8879246354",
+    "atsScore": 65,
+    "status": "Phone Call",
+    "appliedDate": "2026-07-20T00:00:00.000Z",
     "followUpCount": "0 / 5",
     "interviewDone": false,
     "interviewRound": 1,
-    "googleThreadId": "19f76672c8b72ab5"
+    "applicationSource": "phone"
   },
   {
-    "timestamp": "2026-07-19T09:12:42.894Z",
-    "role": "wefasdfg",
-    "company": "milin",
-    "recipientEmail": "milind@mailinator.com",
+    "timestamp": "2026-08-10T08:38:22.203Z",
+    "role": "milind",
+    "company": "milind",
+    "recipientEmail": "milindstalekar1667@gmail.com",
     "atsScore": 0,
-    "status": "Applied (emailed) - manual send",
-    "appliedDate": "2026-07-19T09:12:42.894Z",
+    "status": "Emailed",
+    "appliedDate": "2026-08-10T08:38:22.203Z",
     "followUpCount": "0 / 5",
     "interviewDone": false,
-    "interviewRound": 0,
-    "googleThreadId": "19f79a630f9476af"
+    "interviewRound": 2,
+    "googleThreadId": "19fead2a6bc17849",
+    "applicationSource": "email"
   }
 ]
