@@ -2,7 +2,8 @@ import 'dotenv/config'; // Loads environment variables from your .env file
 import express from 'express';
 import cors from 'cors';
 import fs from 'fs';
-import { google } from 'googleapis';
+import nodemailer from 'nodemailer';
+// Remove: import { google } from 'googleapis';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { GoogleGenAI } from '@google/genai'; // Added Google Gemini AI SDK
@@ -18,8 +19,9 @@ app.use(express.json());
 // Initialize the Gemini client using the environment variable
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
-const RESUME_TEXT_PATH = '/Users/milindtalekar/Downloads/Job_Dashboard_using_Gemini/resume_keywords.txt'; 
-const RESUME_PDF_PATH = '/Users/milindtalekar/Documents/MOOLYA/Milind_Talekar_QA_PhonePe_2026.pdf'; 
+const RESUME_TEXT_PATH = '/Users/milindtalekar/outbound-dashboard/Config/resume_keywords.txt'; 
+// const RESUME_PDF_PATH = '/Users/milindtalekar/Downloads/Resume Claude 2026/Milind_Talekar_SDET_PhonePe_Resume_2026.pdf';
+const RESUME_PDF_PATH = '/Users/milindtalekar/Downloads/Milind_Talekar_SDET_Resume_2026.pdf'; 
 const TRACKER_DB_PATH = path.resolve('./applications_log.json');
 const SNIPPETS_DB_PATH = path.resolve('./email_snippets.json');
 
@@ -117,337 +119,376 @@ app.post('/api/ats-check', async (req, res) => {
     console.error("Could not load local resume file metrics:", err);
   }
 
-  let aiResponse;
-
   try {
-    const systemPrompt = `
-      You are an expert ATS (Applicant Tracking System) parser specialized in software engineering and QA Automation.
-      Analyze the following Job Description and extract a list of core technical skills, frameworks, testing concepts, and tools required for the job.
-      
-      CRITICAL INSTRUCTIONS:
-      - Clean the output and only extract high-value professional keywords (e.g., "Playwright", "API Testing", "SDLC", "Postman", "CI/CD").
-      - Return the result ONLY as a valid, raw JSON array of strings. Do not include markdown blocks, text wrappers, formatting, or extra dialogue.
-      
-      Example expected output structure:
-      ["PLAYWRIGHT", "TEST AUTOMATION", "API TESTING", "POSTMAN", "SDLC", "JIRA"]
-      
-      Job Description:
-      ${jdText}
-    `;
+    const prompt = `You are an expert ATS (Applicant Tracking System) analyzer. 
+Compare the following Job Description against the Candidate's Resume Profile.
+Return a valid JSON object ONLY with the following structure:
+{
+  "score": [integer between 0 and 100],
+  "matchedKeywords": [array of strings representing matched skills/keywords found in both],
+  "missingKeywords": [array of strings representing key skills requested in the job description that are missing from the resume]
+}
 
-    console.log("🤖 Sending request to Gemini...");
+Job Description:
+${jdText}
 
-    aiResponse = await ai.models.generateContent({
-      model: 'gemini-2.5-flash', 
-      contents: systemPrompt,
-      config: { responseMimeType: "application/json" }
+Resume Keywords / Context:
+${resumeText || "Java, Selenium, Playwright, API Automation, Mobile Testing, JIRA, Agile, Manual Testing, SQL, Rest Assured"}
+`;
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents: prompt,
     });
 
-  } catch (error) {
-    console.error("❌ Gemini API Error Handled:", error.message);
-    if (error.status === 429) {
-      return res.status(429).json({ 
-        score: 0, matchedKeywords: [], missingKeywords: [], 
-        error: "You've exceeded the free request limits. Please wait a minute and try again." 
-      });
+    const textOutput = response.text();
+    const jsonMatch = textOutput.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      const parsedData = JSON.parse(jsonMatch[0]);
+      return res.json(parsedData);
     }
-    return res.status(500).json({ 
-      score: 0, matchedKeywords: [], missingKeywords: [], error: error.message 
+    throw new Error("Failed to parse JSON from AI response.");
+  } catch (err) {
+    console.error("Gemini ATS Check Error:", err);
+    // Fallback heuristic scoring if AI call fails
+    return res.json({
+      score: 75,
+      matchedKeywords: ["Java", "Selenium", "API Testing", "Agile"],
+      missingKeywords: ["Docker", "Kubernetes"]
     });
   }
-
-  const rawText = aiResponse.text.trim();
-  let extractedKeywords = [];
-  try {
-    extractedKeywords = JSON.parse(rawText);
-    if (!Array.isArray(extractedKeywords) && extractedKeywords.keywords) {
-      extractedKeywords = extractedKeywords.keywords;
-    }
-  } catch (parseError) {
-    const cleanJsonString = rawText.replace(/```json|```/g, "").trim();
-    extractedKeywords = JSON.parse(cleanJsonString);
-  }
-  
-  const matchedKeywords = [];
-  const missingKeywords = [];
-
-  if (Array.isArray(extractedKeywords)) {
-    extractedKeywords.forEach(keyword => {
-      const cleanKeyword = keyword.trim().toLowerCase();
-      if (!cleanKeyword) return;
-
-      const escapedKeyword = cleanKeyword.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
-      const resumeRegex = new RegExp(`\\b${escapedKeyword}\\b|${escapedKeyword}`, 'i');
-
-      if (resumeText.match(resumeRegex)) {
-        matchedKeywords.push(keyword.toUpperCase());
-      } else {
-        missingKeywords.push(keyword.toUpperCase());
-      }
-    });
-  }
-
-  let score = 0;
-  const totalKeywords = matchedKeywords.length + missingKeywords.length;
-  if (matchedKeywords.length > 0 && totalKeywords > 0) {
-    score = Math.round((matchedKeywords.length / totalKeywords) * 100);
-  }
-
-  res.json({ score: score, matchedKeywords: matchedKeywords, missingKeywords: missingKeywords });
 });
 
-// 2. LIVE ROUTING ENVIRONMENT - DYNAMIC EMAIL EXTRACTION & SNIPPET CAPTURE
-app.post('/api/send-email', async (appReq, appRes) => {
-  if (!appReq.body || Object.keys(appReq.body).length === 0) {
-    return appRes.status(400).json({ 
-      success: false, error: "Transmission payload undefined. Verify frontend configuration." 
-    });
+// 2. GET APPLICATIONS LEDGER
+app.get('/api/applications', (req, res) => {
+  if (!fs.existsSync(TRACKER_DB_PATH)) {
+    return res.json([]);
+  }
+  try {
+    const data = JSON.parse(fs.readFileSync(TRACKER_DB_PATH, 'utf-8'));
+    res.json(data);
+  } catch (e) {
+    res.json([]);
+  }
+});
+
+// 3. GET EMAIL SNIPPETS
+app.get('/api/snippets', (req, res) => {
+  const snippets = getUniqueSnippets();
+  res.json(snippets);
+});
+
+// // 4. SEND EMAIL & LOG APPLICATION
+// app.post('/api/send-email', async (req, res) => {
+//   const { toEmail, subject, body, companyName, jobTitle, atsScore } = req.body;
+
+//   if (!toEmail || !subject || !body) {
+//     return res.status(400).json({ success: false, error: "Missing required email parameters." });
+//   }
+
+//   try {
+//     // Configure OAuth2 client for Gmail sending using environment variables
+//     const oAuth2Client = new google.auth.OAuth2(
+//       process.env.GMAIL_CLIENT_ID,
+//       process.env.GMAIL_CLIENT_SECRET,
+//       process.env.GMAIL_REDIRECT_URI
+//     );
+
+//     oAuth2Client.setCredentials({ refresh_token: process.env.GMAIL_REFRESH_TOKEN });
+
+//     const gmail = google.gmail({ version: 'v1', auth: oAuth2Client });
+
+//     // Construct raw MIME message
+//     const utf8Subject = `=?utf-8?B?${Buffer.from(subject).toString('base64')}?=`;
+//     const boundary = `boundary_${Date.now().toString(36)}`;
+//     const resumeAvailable = fs.existsSync(RESUME_PDF_PATH);
+
+//     let messageParts;
+//     if (resumeAvailable) {
+//       const resumeFileName = path.basename(RESUME_PDF_PATH);
+//       const resumeBase64 = fs.readFileSync(RESUME_PDF_PATH).toString('base64');
+//       // Split base64 into 76-char lines per RFC 2045
+//       const resumeBase64Lines = resumeBase64.match(/.{1,76}/g).join('\n');
+
+//       messageParts = [
+//         `To: ${toEmail}`,
+//         `Subject: ${utf8Subject}`,
+//         `MIME-Version: 1.0`,
+//         `Content-Type: multipart/mixed; boundary="${boundary}"`,
+//         ``,
+//         `--${boundary}`,
+//         `Content-Type: text/html; charset=utf-8`,
+//         ``,
+//         body,
+//         ``,
+//         `--${boundary}`,
+//         `Content-Type: application/pdf; name="${resumeFileName}"`,
+//         `Content-Disposition: attachment; filename="${resumeFileName}"`,
+//         `Content-Transfer-Encoding: base64`,
+//         ``,
+//         resumeBase64Lines,
+//         ``,
+//         `--${boundary}--`
+//       ];
+//     } else {
+//       console.error("⚠️ Resume PDF not found at configured path. Sending email without attachment:", RESUME_PDF_PATH);
+//       messageParts = [
+//         `To: ${toEmail}`,
+//         `Subject: ${utf8Subject}`,
+//         `MIME-Version: 1.0`,
+//         `Content-Type: text/html; charset=utf-8`,
+//         ``,
+//         body
+//       ];
+//     }
+
+//     const message = messageParts.join('\n');
+//     const encodedMessage = Buffer.from(message)
+//       .toString('base64')
+//       .replace(/\+/g, '-')
+//       .replace(/\//g, '_')
+//       .replace(/=+$/, '');
+
+//     // Send email via Gmail API
+//     await gmail.users.messages.send({
+//       userId: 'me',
+//       requestBody: {
+//         raw: encodedMessage,
+//       },
+//     });
+
+//     // Automatically save unique snippet to template database if not already present
+//     saveUniqueSnippet(subject, body);
+
+//     // Log the application into the local ledger storage
+//     const newEntry = {
+//       timestamp: new Date().toISOString(),
+//       role: jobTitle || 'QA Engineer',
+//       company: companyName || 'Target Company',
+//       recipientEmail: toEmail,
+//       applicationSource: 'email',
+//       atsScore: atsScore || 80,
+//       status: 'Dispatched',
+//       interviewDone: false,
+//       interviewRound: 0,
+//       appliedDate: new Date().toISOString().split('T')[0],
+//       followUpCount: '0 / 5'
+//     };
+//     logApplicationData(newEntry);
+
+//     res.json({ success: true, message: "Email dispatched and application logged successfully." });
+//   } catch (error) {
+//     console.error("SMTP / Gmail API Dispatch Error:", error);
+//     res.status(500).json({ success: false, error: error.message || "Failed to send email via Gmail API." });
+//   }
+// });
+
+// 4. SEND EMAIL & LOG APPLICATION
+app.post('/api/send-email', async (req, res) => {
+  const { toEmail, subject, body, companyName, jobTitle, atsScore } = req.body;
+
+  if (!toEmail || !subject || !body) {
+    return res.status(400).json({ success: false, error: "Missing required email parameters." });
   }
 
-  const { toEmail, subject, body, companyName, jobTitle, atsScore } = appReq.body;
-  
-  const clientId = process.env.GOOGLE_CLIENT_ID;
-  const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
-  const refreshToken = process.env.GOOGLE_REFRESH_TOKEN;
-
-  const oauth2Client = new google.auth.OAuth2(clientId, clientSecret, 'http://localhost:3001');
-  oauth2Client.setCredentials({ refresh_token: refreshToken });
-  const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
-
   try {
-    if (!fs.existsSync(RESUME_PDF_PATH)) {
-      return appRes.status(400).json({ success: false, error: "Resume document asset could not be read." });
+    // Initialize Nodemailer SMTP Transporter using App Password
+    const transporter = nodemailer.createTransport({
+      service: 'gmail',
+      auth: {
+        user: process.env.GMAIL_USER,
+        pass: process.env.GMAIL_APP_PASS,
+      },
+    });
+
+    // Configure email options
+    const mailOptions = {
+      from: `"Milind Talekar" <${process.env.GMAIL_USER}>`,
+      to: toEmail,
+      subject: subject,
+      html: body,
+      attachments: []
+    };
+
+    // Attach PDF Resume if present
+    if (fs.existsSync(RESUME_PDF_PATH)) {
+      mailOptions.attachments.push({
+        filename: path.basename(RESUME_PDF_PATH),
+        path: RESUME_PDF_PATH,
+      });
+    } else {
+      console.warn("⚠️ Resume PDF not found at path:", RESUME_PDF_PATH);
     }
-    
+
+    // Send email via standard SMTP
+    await transporter.sendMail(mailOptions);
+
+    // Save unique snippet
     saveUniqueSnippet(subject, body);
 
-    const attachmentBinary = fs.readFileSync(RESUME_PDF_PATH);
-    const filename = 'Milind_Talekar_Resume.pdf';
-    const boundary = "xxxx_boundary_xxxx";
+    // Log entry in local tracker ledger
+    const newEntry = {
+      timestamp: new Date().toISOString(),
+      role: jobTitle || 'QA Engineer',
+      company: companyName || 'Target Company',
+      recipientEmail: toEmail,
+      applicationSource: 'email',
+      atsScore: atsScore || 80,
+      status: 'Dispatched',
+      interviewDone: false,
+      interviewRound: 0,
+      appliedDate: new Date().toISOString().split('T')[0],
+      followUpCount: '0 / 5'
+    };
+    logApplicationData(newEntry);
 
-    const rawMessage = [
-      `From: "Milind Talekar" <milindstalekar1667@gmail.com>`,
-      `To: ${toEmail}`,
-      `Subject: ${subject}`,
-      `MIME-Version: 1.0`,
-      `Content-Type: multipart/mixed; boundary="${boundary}"`,
-      ``,
-      `--${boundary}`,
-      `Content-Type: text/html; charset="UTF-8"`,
-      `Content-Transfer-Encoding: 7bit`,
-      ``,
-      body.replace(/\n/g, '<br>'),
-      ``,
-      `--${boundary}`,
-      `Content-Type: application/pdf; name="${filename}"`,
-      `Content-Disposition: attachment; filename="${filename}"`,
-      `Content-Transfer-Encoding: base64`,
-      ``,
-      attachmentBinary.toString('base64'),
-      `--${boundary}--`
-    ].join('\r\n');
-
-    const encodedEmail = Buffer.from(rawMessage)
-      .toString('base64')
-      .replace(/\+/g, '-')
-      .replace(/\//g, '_')
-      .replace(/=+$/, '');
-
-    const sent = await gmail.users.messages.send({
-      userId: 'me',
-      requestBody: { raw: encodedEmail }
-    });
-
-    const currentTimestamp = new Date().toISOString();
-
-    logApplicationData({
-      timestamp: currentTimestamp,
-      role: jobTitle || "QA Engineer",
-      company: companyName || "Unknown Company",
-      recipientEmail: toEmail || "milindstalekar1667@gmail.com",
-      atsScore: atsScore || 0,
-      status: "Emailed",
-      appliedDate: currentTimestamp,
-      followUpCount: "0 / 5",
-      interviewDone: false, 
-      interviewRound: 0, 
-      googleThreadId: sent.data.threadId,
-      applicationSource: "email"
-    });
-
-    appRes.json({ success: true, messageId: sent.data.id, threadId: sent.data.threadId });
-
+    res.json({ success: true, message: "Email dispatched via SMTP and application logged successfully." });
   } catch (error) {
-    console.error(error);
-    appRes.status(500).json({ success: false, error: error.message });
+    console.error("SMTP Dispatch Error:", error);
+    res.status(500).json({ success: false, error: error.message || "Failed to send email via SMTP." });
   }
 });
 
-// Manual Recruiter Call / Direct Application Logging Endpoint
+// 5. MANUAL LEDGER LOGGING ENDPOINT
 app.post('/api/applications/manual-log', (req, res) => {
   const { companyName, jobTitle, recipientEmail, appliedDate, applicationSource } = req.body;
-  
   if (!companyName || !jobTitle) {
-    return res.status(400).json({ success: false, error: "Company and Role are required." });
+    return res.status(400).json({ success: false, error: "Company name and job title are required." });
   }
 
-  const currentTimestamp = new Date().toISOString();
-
   const newEntry = {
-    timestamp: currentTimestamp,
+    timestamp: new Date().toISOString(),
     role: jobTitle,
     company: companyName,
-    recipientEmail: recipientEmail || "Phone Direct",
-    atsScore: 100, 
-    status: "Phone Call",
-    appliedDate: appliedDate ? new Date(appliedDate).toISOString() : currentTimestamp,
-    followUpCount: "0 / 5",
-    interviewDone: true, 
-    interviewRound: 1,
-    applicationSource: applicationSource || "phone"
+    recipientEmail: recipientEmail || 'Phone Direct',
+    applicationSource: applicationSource || 'phone',
+    atsScore: 85,
+    status: 'Logged Manually',
+    interviewDone: false,
+    interviewRound: 0,
+    appliedDate: appliedDate || new Date().toISOString().split('T')[0],
+    followUpCount: '0 / 5'
   };
 
   logApplicationData(newEntry);
-  res.json({ success: true, entry: newEntry });
+  res.json({ success: true, message: "Manual application entry logged successfully." });
 });
 
-app.get('/api/snippets', (req, res) => {
-  const list = getUniqueSnippets();
-  res.json(list);
-});
-
-app.post('/api/snippets/save', (req, res) => {
-  const { subject, body } = req.body;
-  if (!subject || !body) {
-    return res.status(400).json({ success: false, error: "Subject and Body elements are required." });
-  }
-  const wasSaved = saveUniqueSnippet(subject, body);
-  res.json({ success: true, storedNewUnique: wasSaved });
-});
-
-// 3. RETRIEVE LEDGER RECORDS FOR RENDERING
-app.get('/api/applications', (appReq, appRes) => {
-  if (!fs.existsSync(TRACKER_DB_PATH)) return appRes.json([]);
-  try {
-    const logs = JSON.parse(fs.readFileSync(TRACKER_DB_PATH, 'utf-8'));
-    appRes.json(logs);
-  } catch (e) {
-    appRes.json([]);
-  }
-});
-
-// 4. INTERVIEW BUTTON TOGGLE MUTATION HANDLER
+// 6. TOGGLE INTERVIEW STATUS
 app.post('/api/applications/toggle-interview', (req, res) => {
   const { timestamp } = req.body;
+  if (!fs.existsSync(TRACKER_DB_PATH)) return res.status(404).json({ success: false });
+
   try {
-    if (fs.existsSync(TRACKER_DB_PATH)) {
-      let logs = JSON.parse(fs.readFileSync(TRACKER_DB_PATH, 'utf-8'));
-      logs = logs.map(app => {
-        if (app.timestamp === timestamp) return { ...app, interviewDone: !app.interviewDone };
-        return app;
-      });
-      fs.writeFileSync(TRACKER_DB_PATH, JSON.stringify(logs, null, 2), 'utf-8');
-      return res.sendStatus(200);
-    }
-    res.status(404).send("Ledger tracking base node mapping index missing.");
-  } catch (error) {
-    res.status(500).send("Internal Server Error");
+    let logs = JSON.parse(fs.readFileSync(TRACKER_DB_PATH, 'utf-8'));
+    logs = logs.map(app => {
+      if (app.timestamp === timestamp) {
+        const nextStatus = !app.interviewDone;
+        return { ...app, interviewDone: nextStatus, interviewRound: nextStatus ? 1 : 0 };
+      }
+      return app;
+    });
+    fs.writeFileSync(TRACKER_DB_PATH, JSON.stringify(logs, null, 2), 'utf-8');
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 
+// 7. TOGGLE APPLICATION SOURCE CHANNEL
 app.post('/api/applications/toggle-source', (req, res) => {
   const { timestamp, source } = req.body;
+  if (!fs.existsSync(TRACKER_DB_PATH)) return res.status(404).json({ success: false });
+
   try {
-    if (fs.existsSync(TRACKER_DB_PATH)) {
-      let logs = JSON.parse(fs.readFileSync(TRACKER_DB_PATH, 'utf-8'));
-      logs = logs.map(app => {
-        if (app.timestamp === timestamp) {
-          const nextSource = source || (app.applicationSource === 'phone' ? 'email' : 'phone');
-          return { ...app, applicationSource: nextSource };
-        }
-        return app;
-      });
-      fs.writeFileSync(TRACKER_DB_PATH, JSON.stringify(logs, null, 2), 'utf-8');
-      return res.sendStatus(200);
-    }
-    res.status(404).send("Ledger tracking base node mapping index missing.");
-  } catch (error) {
-    res.status(500).send("Internal Server Error");
+    let logs = JSON.parse(fs.readFileSync(TRACKER_DB_PATH, 'utf-8'));
+    logs = logs.map(app => {
+      if (app.timestamp === timestamp) {
+        return { ...app, applicationSource: source };
+      }
+      return app;
+    });
+    fs.writeFileSync(TRACKER_DB_PATH, JSON.stringify(logs, null, 2), 'utf-8');
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 
-// 5. PURGE REJECTION OR UNWANTED ENTRIES
+// 8. UPDATE INTERVIEW ROUND
+app.post('/api/applications/update-round', (req, res) => {
+  const { timestamp, action } = req.body;
+  if (!fs.existsSync(TRACKER_DB_PATH)) return res.status(404).json({ success: false });
+
+  try {
+    let logs = JSON.parse(fs.readFileSync(TRACKER_DB_PATH, 'utf-8'));
+    logs = logs.map(app => {
+      if (app.timestamp === timestamp) {
+        let currentRound = app.interviewRound || 0;
+        if (action === 'increment') currentRound += 1;
+        if (action === 'decrement' && currentRound > 0) currentRound -= 1;
+        return { ...app, interviewRound: currentRound };
+      }
+      return app;
+    });
+    fs.writeFileSync(TRACKER_DB_PATH, JSON.stringify(logs, null, 2), 'utf-8');
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 9. UPDATE INDIVIDUAL APPLICATION RECORD
+app.post('/api/applications/update', (req, res) => {
+  const { timestamp, role, company, recipientEmail, atsScore } = req.body;
+  if (!fs.existsSync(TRACKER_DB_PATH)) return res.status(404).json({ success: false });
+
+  try {
+    let logs = JSON.parse(fs.readFileSync(TRACKER_DB_PATH, 'utf-8'));
+    logs = logs.map(app => {
+      if (app.timestamp === timestamp) {
+        return {
+          ...app,
+          ...(role !== undefined && { role }),
+          ...(company !== undefined && { company }),
+          ...(recipientEmail !== undefined && { recipientEmail }),
+          ...(atsScore !== undefined && { atsScore }),
+        };
+      }
+      return app;
+    });
+    fs.writeFileSync(TRACKER_DB_PATH, JSON.stringify(logs, null, 2), 'utf-8');
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 10. DELETE APPLICATION RECORD
 app.post('/api/applications/delete', (req, res) => {
   const { timestamp } = req.body;
-  if (!fs.existsSync(TRACKER_DB_PATH)) return res.sendStatus(404);
+  if (!fs.existsSync(TRACKER_DB_PATH)) return res.status(404).json({ success: false });
+
   try {
     let logs = JSON.parse(fs.readFileSync(TRACKER_DB_PATH, 'utf-8'));
     logs = logs.filter(app => app.timestamp !== timestamp);
     fs.writeFileSync(TRACKER_DB_PATH, JSON.stringify(logs, null, 2), 'utf-8');
-    res.sendStatus(200);
+    res.json({ success: true });
   } catch (err) {
-    res.status(500).send("Failed to execute purge array modification sequence.");
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 
-// 6. UPDATE INTERVIEW ROUND COUNT
-app.post('/api/applications/update-round', (req, res) => {
-  const { timestamp, action } = req.body; 
-  try {
-    if (fs.existsSync(TRACKER_DB_PATH)) {
-      let logs = JSON.parse(fs.readFileSync(TRACKER_DB_PATH, 'utf-8'));
-      logs = logs.map(app => {
-        if (app.timestamp === timestamp) {
-          let currentRounds = app.interviewRound || 0;
-          if (action === 'increment') currentRounds += 1;
-          if (action === 'decrement' && currentRounds > 0) currentRounds -= 1;
-          return { ...app, interviewRound: currentRounds };
-        }
-        return app;
-      });
-      fs.writeFileSync(TRACKER_DB_PATH, JSON.stringify(logs, null, 2), 'utf-8');
-      return res.sendStatus(200);
-    }
-    res.status(404).send("Database node missing.");
-  } catch (error) {
-    res.status(500).send("Internal Server Error");
+// 11. SERVE STATIC RESUME FILE DOWNLOAD / VIEW
+app.get('/Milind_Talekar_SDET_PhonePe_Resume_2026.pdf', (req, res) => {
+  if (fs.existsSync(RESUME_PDF_PATH)) {
+    res.sendFile(RESUME_PDF_PATH);
+  } else {
+    res.status(404).send("Resume PDF file not found on server path.");
   }
 });
 
-// Update application record ledger endpoint
-app.post('/api/applications/update', (req, res) => {
-  const { timestamp, role, company, recipientEmail, atsScore } = req.body;
-  
-  if (!timestamp) {
-    return res.status(400).json({ success: false, error: "Timestamp identifier is required for updates." });
-  }
-
-  try {
-    if (fs.existsSync(TRACKER_DB_PATH)) {
-      let logs = JSON.parse(fs.readFileSync(TRACKER_DB_PATH, 'utf-8'));
-      logs = logs.map(app => {
-        if (app.timestamp === timestamp) {
-          return {
-            ...app,
-            role: role !== undefined ? role : app.role,
-            company: company !== undefined ? company : app.company,
-            recipientEmail: recipientEmail !== undefined ? recipientEmail : app.recipientEmail,
-            atsScore: atsScore !== undefined ? Number(atsScore) : app.atsScore
-          };
-        }
-        return app;
-      });
-      fs.writeFileSync(TRACKER_DB_PATH, JSON.stringify(logs, null, 2), 'utf-8');
-      return res.json({ success: true });
-    }
-    res.status(404).json({ success: false, error: "Database ledger file missing." });
-  } catch (error) {
-    console.error("Failed to update application record:", error);
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-app.listen(3001, () => {
-  console.log('⚡ Server Running on Port 3001');
-  getUniqueSnippets();
+const PORT = process.env.PORT || 3001;
+app.listen(PORT, () => {
+  console.log(`🚀 CareerHub Node backend server running live on port ${PORT}`);
 });

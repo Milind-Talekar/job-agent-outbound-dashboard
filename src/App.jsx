@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   Briefcase, Mail, User, Paperclip, Check, X, Download, 
   Trash2, Upload, FileText, Eye, Sparkles, Send, 
@@ -61,10 +61,24 @@ export default function App() {
   const [qjmRegion, setQjmRegion] = useState('all');
   const [qjmVerdict, setQjmVerdict] = useState('all');
   const [qjmSort, setQjmSort] = useState('score');
+  
+  // New Location Filter States
+  const [selectedLocations, setSelectedLocations] = useState([]); // Array for multi-select
+  const [isLocationDropdownOpen, setIsLocationDropdownOpen] = useState(false);
+
   const [qjmStatusText, setQjmStatusText] = useState('');
   const [qjmIsLoading, setQjmIsLoading] = useState(false);
   const [qjmIsError, setQjmIsError] = useState(false);
   const [expandedJobIds, setExpandedJobIds] = useState({});
+  const qjmFileInputRef = useRef(null);
+
+  // ==================== HR EMAIL CONTACT EXTRACTOR (New Feature) ====================
+  const [hrContacts, setHrContacts] = useState([]);
+  const [hrStatusText, setHrStatusText] = useState('');
+  const [hrIsLoading, setHrIsLoading] = useState(false);
+  const [hrIsError, setHrIsError] = useState(false);
+  const hrFileInputRef = useRef(null);
+  // ====================================================================================
 
   // Load PDF.js CDN script dynamically for client-side parsing
   useEffect(() => {
@@ -98,6 +112,18 @@ export default function App() {
     }
     fetchApplications();
     fetchSnippets();
+  }, []);
+
+  // Load saved HR contacts from localStorage on mount (new, standalone effect)
+  useEffect(() => {
+    try {
+      const savedHrContacts = JSON.parse(localStorage.getItem('hr-contacts-v1'));
+      if (savedHrContacts && Array.isArray(savedHrContacts)) {
+        setHrContacts(savedHrContacts);
+      }
+    } catch (e) {
+      console.error("Error loading HR contacts local storage:", e);
+    }
   }, []);
 
   const handleSaveQjmProfile = () => {
@@ -156,6 +182,14 @@ export default function App() {
     const expNum = parseExpMin(job.experience);
     if (expNum === 0 && /fresher|intern/i.test(job.title)) return 'fresher';
     return 'india';
+  };
+
+  // Helper to extract clean distinct location names (avoiding combined strings like "Bangalore / Ahmedabad")
+  const getNormalizedLocations = (jobLocationStr) => {
+    if (!jobLocationStr) return ['Not Specified'];
+    // Split by common delimiters like '/', ',', '|', '&', or 'or'
+    const parts = jobLocationStr.split(/[\/|,&]|(\bor\b)/i).map(s => s ? s.trim() : '').filter(Boolean);
+    return parts.length > 0 ? parts : [jobLocationStr.trim()];
   };
 
   const tokenizeSkills = (str) => {
@@ -229,11 +263,9 @@ export default function App() {
     try {
       let full = '';
       
-      // If it's a plain text file, read it directly as text
       if (file.type === 'text/plain' || file.name.endsWith('.txt')) {
         full = await file.text();
       } else {
-        // Otherwise, assume it's a PDF and parse it via PDF.js
         if (!window.pdfjsLib) {
           alert("PDF.js library is still loading. Please try again in a moment.");
           setQjmIsLoading(false);
@@ -247,17 +279,30 @@ export default function App() {
           const page = await doc.getPage(i);
           const content = await page.getTextContent();
           let lastY = null;
-          let lineParts = [];
+          let lastEndX = null;
+          let lineText = '';
           content.items.forEach(it => {
             const y = it.transform[5];
+            const x = it.transform[4];
             if (lastY !== null && Math.abs(y - lastY) > 2) {
-              full += lineParts.join(' ') + '\n';
-              lineParts = [];
+              full += lineText + '\n';
+              lineText = '';
+              lastEndX = null;
             }
-            lineParts.push(it.str);
+            // PDF.js sometimes splits a single word into multiple text runs
+            // (font/kerning boundaries) with almost no gap between them.
+            // Only insert a space when there's a real visual gap - otherwise
+            // words like "resume" get corrupted into "r esume", which broke
+            // exact-string label matching and email extraction downstream.
+            if (lastEndX !== null) {
+              const gap = x - lastEndX;
+              if (gap > 1) lineText += ' ';
+            }
+            lineText += it.str;
+            lastEndX = x + (it.width || 0);
             lastY = y;
           });
-          if (lineParts.length) full += lineParts.join(' ') + '\n';
+          if (lineText) full += lineText + '\n';
           full += '\n';
         }
       }
@@ -297,6 +342,24 @@ export default function App() {
       setQjmStatusText("Error parsing document.");
     } finally {
       setQjmIsLoading(false);
+      if (e.target) e.target.value = '';
+    }
+  };
+
+  const handleClearQjmData = () => {
+    setQjmJobs([]);
+    setExpandedJobIds({});
+    setQjmStatusText('');
+    setQjmIsError(false);
+    setQjmIsLoading(false);
+    setQjmRegion('all');
+    setQjmVerdict('all');
+    setSelectedLocations([]);
+    try {
+      localStorage.removeItem('qjm-jobs-v1');
+    } catch (e) {}
+    if (qjmFileInputRef.current) {
+      qjmFileInputRef.current.value = '';
     }
   };
 
@@ -311,6 +374,126 @@ export default function App() {
     window.scrollTo({ top: 400, behavior: 'smooth' });
   };
   // ============================================================================================
+
+  // ==================== HR EMAIL CONTACT EXTRACTOR (New Feature) ====================
+  const parseHrContactsFromText = (rawText) => {
+    const rawLines = rawText.split(/\n/).map(l => l.trim()).filter(Boolean);
+    const mergedLines = [];
+    rawLines.forEach(line => {
+      if (mergedLines.length > 0 && /^[a-z]{1,3}$/.test(line)) {
+        mergedLines[mergedLines.length - 1] = mergedLines[mergedLines.length - 1] + line;
+      } else {
+        mergedLines.push(line);
+      }
+    });
+
+    const contacts = [];
+    mergedLines.forEach((line, idx) => {
+      const emailMatch = line.match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/);
+      if (!emailMatch) return;
+      const linkedinMatch = line.match(/https?:\/\/[^\s]*linkedin\.com[^\s]*/i);
+      let name = line.substring(0, emailMatch.index).trim();
+      name = name.replace(/[:\-|]+$/, '').trim();
+      if (!name || /HR Name|HR Email|Email ID|LinkedIn Profile/i.test(name)) name = 'Unknown';
+      contacts.push({
+        id: 'hr-' + Date.now() + '-' + idx,
+        name,
+        email: emailMatch[0],
+        linkedin: linkedinMatch ? linkedinMatch[0] : ''
+      });
+    });
+    return contacts;
+  };
+
+  const handleHrFileUpload = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    setHrIsLoading(true);
+    setHrIsError(false);
+    setHrStatusText(`Reading ${file.name}...`);
+
+    try {
+      let full = '';
+      if (file.type === 'text/plain' || file.name.endsWith('.txt')) {
+        full = await file.text();
+      } else {
+        if (!window.pdfjsLib) {
+          alert("PDF.js library is still loading. Please try again in a moment.");
+          setHrIsLoading(false);
+          return;
+        }
+
+        const buf = await file.arrayBuffer();
+        const doc = await window.pdfjsLib.getDocument({ data: buf }).promise;
+        for (let i = 1; i <= doc.numPages; i++) {
+          setHrStatusText(`Parsing page ${i} of ${doc.numPages}...`);
+          const page = await doc.getPage(i);
+          const content = await page.getTextContent();
+          let lastY = null;
+          let lastEndX = null;
+          let lineText = '';
+          content.items.forEach(it => {
+            const y = it.transform[5];
+            const x = it.transform[4];
+            if (lastY !== null && Math.abs(y - lastY) > 2) {
+              full += lineText + '\n';
+              lineText = '';
+              lastEndX = null;
+            }
+            // PDF.js sometimes splits a single word into multiple text runs
+            // (font/kerning boundaries) with almost no gap between them.
+            // Only insert a space when there's a real visual gap - otherwise
+            // words like "resume" get corrupted into "r esume", which broke
+            // exact-string label matching and email extraction downstream.
+            if (lastEndX !== null) {
+              const gap = x - lastEndX;
+              if (gap > 1) lineText += ' ';
+            }
+            lineText += it.str;
+            lastEndX = x + (it.width || 0);
+            lastY = y;
+          });
+          if (lineText) full += lineText + '\n';
+          full += '\n';
+        }
+      }
+
+      setHrStatusText("Extracting HR contacts...");
+      const parsedContacts = parseHrContactsFromText(full);
+      setHrContacts(parsedContacts);
+      try {
+        localStorage.setItem('hr-contacts-v1', JSON.stringify(parsedContacts));
+      } catch (err) {}
+      setHrStatusText(`Successfully extracted ${parsedContacts.length} HR contact(s)!`);
+    } catch (err) {
+      console.error(err);
+      setHrIsError(true);
+      setHrStatusText("Error parsing document.");
+    } finally {
+      setHrIsLoading(false);
+      if (e.target) e.target.value = '';
+    }
+  };
+
+  const handleUseHrContact = (contact) => {
+    setRecruiterEmail(contact.email);
+    window.scrollTo({ top: 400, behavior: 'smooth' });
+  };
+
+  const handleClearHrContacts = () => {
+    setHrContacts([]);
+    setHrStatusText('');
+    setHrIsError(false);
+    setHrIsLoading(false);
+    try {
+      localStorage.removeItem('hr-contacts-v1');
+    } catch (err) {}
+    if (hrFileInputRef.current) {
+      hrFileInputRef.current.value = '';
+    }
+  };
+  // ====================================================================================
 
   const fetchApplications = async () => {
     try {
@@ -363,10 +546,10 @@ export default function App() {
           .replace(/\{\{Job Portal Name\}\}/g, effectivePortal || 'Job Portal');
         
         setSubjectLine(populatedSubject);
-        setEmailBody(populatedBody.replace(/<br>/g, '\n'));
+        setEmailBody(populatedBody);
       } else {
         setSubjectLine(companyName ? `Job Application | ${companyName} | ${effectiveRole || '[Job Title]'} | Milind Talekar` : `Job Application | ${effectiveRole || '[Job Title]'} | Milind Talekar`);
-        setEmailBody(`Hello Team,\n\nI hope this message finds you well.\n\nI am writing to apply for the position of <b>${effectiveRole || '[Job Title]'}</b> profile.\nMy experience and qualification are closely matching with the job responsibilities mentioned in the job description.\n\nI have <b>5.4 years of experience</b> in Information Technology, specializing in <b>Software Quality Assurance Testing</b>.\nI am an <b>Immediate Joiner.</b>\n\nAttached is my resume, which provides further insight into my professional experience and qualifications.\n\nThank you for considering my application. I look forward to the opportunity to discuss how I can contribute to your team.\n\nThanks and Regards,\nMilind Talekar\n+91- 8208132705`);
+        setEmailBody(`Hello,<br><br>I hope this message finds you well.<br><br>I am writing to apply for the position of <b>${effectiveRole || '[Job Title]'}</b> profile.<br>My experience and qualification are closely matching with the job responsibilities mentioned in the job description.<br><br>I have <b>5.4 years of experience</b> in Information Technology, specializing in <b>Software Quality Assurance Testing</b>.<br>I am an <b>Immediate Joiner.</b><br><br>Attached is my resume, which provides further insight into my professional experience and qualifications.<br><br>Thank you for considering my application. I look forward to the opportunity to discuss how I can contribute to your team.<br><br>Thanks and Regards,<br>Milind Talekar<br>+91- 8208132705`);
       }
     }
   }, [selectedPosition, customPosition, selectedJobPortal, customJobPortal, companyName, selectedSnippetId]);
@@ -389,26 +572,8 @@ export default function App() {
         .replace(/\{\{Job Portal Name\}\}/g, effectivePortal || 'Job Portal');
       
       setSubjectLine(populatedSubject);
-      setEmailBody(populatedBody.replace(/<br>/g, '\n').replace(/<\/?[^>]+(>|$)/g, ""));
+      setEmailBody(populatedBody);
     }
-  };
-
-  const applyTextFormatting = (openTag, closeTag) => {
-    const textarea = document.getElementById('emailBodyTextArea');
-    if (!textarea) return;
-
-    const start = textarea.selectionStart;
-    const end = textarea.selectionEnd;
-    const selectedText = emailBody.substring(start, end);
-    const updatedText = emailBody.substring(0, start) + openTag + selectedText + closeTag + emailBody.substring(end);
-
-    setEmailBody(updatedText);
-
-    // Reset cursor position after state update
-    setTimeout(() => {
-      textarea.focus();
-      textarea.setSelectionRange(start + openTag.length, end + openTag.length);
-    }, 0);
   };
 
   const triggerRealAtsCheck = async () => {
@@ -717,7 +882,7 @@ export default function App() {
 
   const handleViewFile = () => {
     if (resumeType === 'system') {
-      window.open('http://localhost:3001/Milind_Talekar_QA_PhonePe_2026.pdf', '_blank');
+      window.open('http://localhost:3001/Milind_Talekar_SDET_PhonePe_Resume_2026.pdf', '_blank');
     } else if (resumeType === 'manual' && customResumeFile) {
       const fileUrl = URL.createObjectURL(customResumeFile);
       window.open(fileUrl, '_blank');
@@ -754,10 +919,27 @@ export default function App() {
   const textSub = isDark ? "text-slate-300" : "text-slate-600";
   const inputEl = isDark ? "bg-slate-950/90 border-slate-700 text-white placeholder-slate-500 focus:ring-blue-500/50" : "bg-white border-slate-300 text-slate-900 placeholder-slate-400 focus:ring-blue-500/30";
 
+  // Gather all unique normalized location options from loaded jobs
+  const availableLocations = Array.from(
+    new Set(
+      qjmJobs.flatMap(job => getNormalizedLocations(job.location))
+    )
+  ).sort();
+
   // Filter & Sort jobs for QJM section
   const filteredQjmJobs = qjmJobs.filter(job => {
     if (qjmRegion !== 'all' && job.region !== qjmRegion) return false;
     if (qjmVerdict !== 'all' && job.verdict !== qjmVerdict) return false;
+    
+    // Custom Multi-Location Filter Logic
+    if (selectedLocations.length > 0) {
+      const jobLocs = getNormalizedLocations(job.location);
+      const matchesAnyLocation = selectedLocations.some(selLoc => 
+        jobLocs.some(jl => jl.toLowerCase().includes(selLoc.toLowerCase()))
+      );
+      if (!matchesAnyLocation) return false;
+    }
+
     return true;
   }).sort((a, b) => {
     if (qjmSort === 'score') return (b.score || 0) - (a.score || 0);
@@ -856,7 +1038,7 @@ export default function App() {
             <div className="space-y-1 flex flex-col justify-between h-full">
               <label className={`text-[11px] ${textSub} font-semibold uppercase tracking-wide`}>01 · Upload Listings File</label>
               <label className={`flex flex-col items-center justify-center border-2 border-dashed ${borderEl} rounded-xl p-5 text-center cursor-pointer hover:border-blue-500 transition ${bgInner} flex-grow`}>
-                <input type="file" onChange={handleFileUpload} className="hidden" />
+                <input type="file" ref={qjmFileInputRef} onChange={handleFileUpload} className="hidden" />
                 <Upload className="w-6 h-6 text-blue-500 mb-1" />
                 <span className={`text-xs font-bold ${textTitle}`}>Click to choose any job listing file</span>
                 <span className="text-[10px] text-slate-400 mt-0.5">Supports PDF, Text files, and more</span>
@@ -923,6 +1105,13 @@ export default function App() {
                   <span className="text-xs text-rose-400 uppercase font-bold text-[10px]">Skip:</span>
                   <span className="text-sm font-bold text-rose-400">{qjmSkipCount}</span>
                 </div>
+                <button
+                  onClick={handleClearQjmData}
+                  className="flex items-center gap-1.5 border border-rose-500/30 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 rounded-xl px-3 py-2 text-xs font-bold transition"
+                  title="Clear parsed listings and upload a new file"
+                >
+                  <Trash2 className="w-3.5 h-3.5" /> Clear Data
+                </button>
               </div>
 
               {/* Filters & Sorting */}
@@ -933,6 +1122,51 @@ export default function App() {
                     <button onClick={() => setQjmRegion('india')} className={`px-3 py-1.5 ${qjmRegion === 'india' ? 'bg-blue-600 text-white font-bold' : `${textSub} hover:bg-slate-800`}`}>India</button>
                     <button onClick={() => setQjmRegion('abroad')} className={`px-3 py-1.5 ${qjmRegion === 'abroad' ? 'bg-blue-600 text-white font-bold' : `${textSub} hover:bg-slate-800`}`}>Abroad</button>
                     <button onClick={() => setQjmRegion('fresher')} className={`px-3 py-1.5 ${qjmRegion === 'fresher' ? 'bg-blue-600 text-white font-bold' : `${textSub} hover:bg-slate-800`}`}>Fresher</button>
+                  </div>
+
+                  {/* Multi-Select Location Filter Section */}
+                  <div className="relative">
+                    <button 
+                      type="button"
+                      onClick={() => setIsLocationDropdownOpen(!isLocationDropdownOpen)}
+                      className={`px-3 py-1.5 rounded-xl border ${borderEl} text-xs font-mono flex items-center gap-2 ${isDark ? 'bg-slate-950 text-slate-200' : 'bg-white text-slate-800'}`}
+                    >
+                      <span>Location: {selectedLocations.length === 0 ? 'All Locations' : `${selectedLocations.length} selected`}</span>
+                      <span className="text-[10px]">▼</span>
+                    </button>
+
+                    {isLocationDropdownOpen && (
+                      <div className={`absolute z-20 mt-1 w-56 rounded-xl border ${borderEl} ${isDark ? 'bg-slate-900 text-slate-200' : 'bg-white text-slate-900'} shadow-2xl p-3 space-y-2 max-h-60 overflow-y-auto`}>
+                        <div className="flex items-center justify-between pb-2 border-b border-slate-700/40 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                          <span>Filter Locations</span>
+                          {selectedLocations.length > 0 && (
+                            <button onClick={() => setSelectedLocations([])} className="text-blue-400 hover:underline">Reset</button>
+                          )}
+                        </div>
+                        <div className="space-y-1.5">
+                          {availableLocations.map((loc) => {
+                            const isChecked = selectedLocations.includes(loc);
+                            return (
+                              <label key={loc} className="flex items-center gap-2 text-xs cursor-pointer hover:opacity-80">
+                                <input 
+                                  type="checkbox"
+                                  checked={isChecked}
+                                  onChange={() => {
+                                    if (isChecked) {
+                                      setSelectedLocations(selectedLocations.filter(item => item !== loc));
+                                    } else {
+                                      setSelectedLocations([...selectedLocations, loc]);
+                                    }
+                                  }}
+                                  className="accent-blue-600 rounded"
+                                />
+                                <span className="font-mono truncate">{loc}</span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
                   </div>
 
                   <div className={`flex rounded-xl border ${borderEl} overflow-hidden text-xs font-mono`}>
@@ -1045,6 +1279,77 @@ export default function App() {
                   })
                 )}
               </div>
+            </div>
+          )}
+        </div>
+        {/* ============================================================================================ */}
+
+        {/* ==================== HR EMAIL CONTACT EXTRACTOR PANEL (NEW) ==================== */}
+        <div className={`${bgPanel} p-5 rounded-2xl border ${borderEl} shadow-2xl transition-colors space-y-4`}>
+          <div className={`flex items-center justify-between pb-2 border-b ${borderEl}`}>
+            <div className="flex items-center gap-2">
+              <Mail className="w-4 h-4 text-emerald-500" />
+              <h3 className={`text-xs font-bold uppercase tracking-wider ${textTitle}`}>HR Email Contact Extractor</h3>
+            </div>
+            <span className="text-[10px] font-mono text-slate-400">Client-Side PDF Runner</span>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-stretch">
+            <div className="space-y-1 flex flex-col justify-between h-full">
+              <label className={`text-[11px] ${textSub} font-semibold uppercase tracking-wide`}>Upload HR Email List File</label>
+              <label className={`flex flex-col items-center justify-center border-2 border-dashed ${borderEl} rounded-xl p-5 text-center cursor-pointer hover:border-emerald-500 transition ${bgInner} flex-grow`}>
+                <input type="file" ref={hrFileInputRef} onChange={handleHrFileUpload} className="hidden" />
+                <Upload className="w-6 h-6 text-emerald-500 mb-1" />
+                <span className={`text-xs font-bold ${textTitle}`}>Click to choose HR email list file</span>
+                <span className="text-[10px] text-slate-400 mt-0.5">Supports PDF, Text files, and more</span>
+              </label>
+              {hrStatusText && (
+                <div className={`flex items-center gap-2 text-xs font-mono mt-2 ${hrIsError ? 'text-rose-400' : 'text-emerald-400'}`}>
+                  {hrIsLoading && <RefreshCw className="w-3 h-3 animate-spin" />}
+                  <span>{hrStatusText}</span>
+                </div>
+              )}
+            </div>
+
+            <div className="flex flex-col gap-5 justify-center items-start">
+              <div className={`${bgInner} border ${borderEl} rounded-xl px-3.5 py-2 flex items-center justify-between gap-x-3 gap-y-1.5 flex-wrap sm:flex-nowrap w-fit motion-safe:transition-all duration-200`}>
+                <span className="text-xs text-slate-400 uppercase font-bold text-[12px]">Contacts Found:</span>
+                <span className={`text-sm font-bold ${textTitle}`}>{hrContacts.length}</span>
+              </div>
+              {hrContacts.length > 0 && (
+                <button
+                  onClick={handleClearHrContacts}
+                  className="flex items-center gap-1.5 border border-rose-500/30 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 rounded-xl px-3 py-2 text-xs font-bold transition self-start"
+                  title="Clear extracted HR contacts and upload a new file"
+                >
+                  <Trash2 className="w-3.5 h-3.5" /> Clear Data
+                </button>
+              )}
+            </div>
+          </div>
+
+          {hrContacts.length > 0 && (
+            <div className="space-y-2 max-h-[400px] overflow-y-auto pr-1 pt-2 border-t border-slate-700/40">
+              {hrContacts.map((contact) => (
+                <div key={contact.id} className={`${bgInner} border ${borderEl} rounded-xl p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2 shadow-md`}>
+                  <div>
+                    <div className={`text-xs font-bold ${textTitle}`}>{contact.name}</div>
+                    <a href={`mailto:${contact.email}`} className="text-blue-400 hover:text-blue-300 text-xs font-mono underline decoration-blue-400/30 underline-offset-4">{contact.email}</a>
+                    {contact.linkedin && (
+                      <div className="text-[10px] text-slate-400 mt-0.5">
+                        <a href={contact.linkedin} target="_blank" rel="noopener noreferrer" className="hover:text-slate-300 underline decoration-slate-500/30">LinkedIn Profile</a>
+                      </div>
+                    )}
+                  </div>
+                  <button
+                    onClick={() => handleUseHrContact(contact)}
+                    className="bg-blue-600 hover:bg-blue-500 text-white px-3 py-1.5 rounded-lg text-xs font-bold shadow-sm transition self-start sm:self-auto"
+                    title="Load this HR email into Outbound Core email sender"
+                  >
+                    Use Email →
+                  </button>
+                </div>
+              ))}
             </div>
           )}
         </div>
@@ -1353,7 +1658,7 @@ export default function App() {
                   <span className={`flex items-center gap-1.5 text-[11px] font-semibold ${textSub}`}><Paperclip className="w-4 h-4 text-blue-500" /> Document Configuration Link:</span>
                   <div className="flex items-center gap-2 font-mono text-[10px]">
                     <span className={`${isDark ? 'bg-slate-900 text-slate-300 border-slate-700' : 'bg-white text-slate-700 border-slate-300'} px-2 py-1 border rounded-md font-medium`}>
-                      {resumeType === 'system' ? 'Milind_Talekar_QA_PhonePe_2026.pdf' : (customResumeFile?.name || 'Setup required')}
+                      {resumeType === 'system' ? 'Milind_Talekar_SDET_PhonePe_Resume_2026.pdf' : (customResumeFile?.name || 'Setup required')}
                     </span>
                     <button type="button" onClick={handleViewFile} className="text-blue-400 hover:text-blue-300 font-bold bg-blue-500/10 border border-blue-500/20 px-2 py-1 rounded-md transition flex items-center gap-1">
                       <Eye className="w-3 h-3" /> View Target File
